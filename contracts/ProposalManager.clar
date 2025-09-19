@@ -1,0 +1,231 @@
+(define-constant ERR-NOT-AUTHORIZED u100)
+(define-constant ERR-INVALID-PROPOSAL-AMOUNT u101)
+(define-constant ERR-INVALID-PROPOSAL-TARGET u102)
+(define-constant ERR-INVALID-PROPOSAL-DURATION u103)
+(define-constant ERR-PROPOSAL-ALREADY-EXISTS u104)
+(define-constant ERR-PROPOSAL-NOT-FOUND u105)
+(define-constant ERR-VOTING-CLOSED u106)
+(define-constant ERR-ALREADY-VOTED u107)
+(define-constant ERR-INSUFFICIENT-STAKE u108)
+(define-constant ERR-PROPOSAL-NOT-OPEN u109)
+(define-constant ERR-VOTING-THRESHOLD-NOT-MET u110)
+(define-constant ERR-INVALID-CLUB-ID u111)
+(define-constant ERR-INVALID-VOTE u112)
+(define-constant ERR-FUND-TRANSFER-FAILED u113)
+(define-constant ERR-INVALID-PROPOSAL-DESCRIPTION u114)
+(define-constant ERR-INVALID-RISK-LEVEL u115)
+(define-constant ERR-INVALID-EXPECTED-RETURN u116)
+(define-constant ERR-PROPOSAL-EXPIRED u117)
+(define-constant ERR-INVALID-TIMESTAMP u118)
+(define-constant ERR-CLUB-NOT-ACTIVE u119)
+(define-constant ERR-MAX-PROPOSALS-EXCEEDED u120)
+(define-data-var next-proposal-id uint u0)
+(define-data-var max-proposals-per-club uint u100)
+(define-data-var voting-period uint u144)
+(define-data-var authority-contract (optional principal) none)
+(define-map proposals
+  { club-id: uint, proposal-id: uint }
+  {
+    proposer: principal,
+    amount: uint,
+    target: principal,
+    duration: uint,
+    votes-for: uint,
+    votes-against: uint,
+    status: (string-ascii 20),
+    start-time: uint,
+    description: (string-utf8 256),
+    risk-level: uint,
+    expected-return: uint
+  }
+)
+(define-map votes
+  { club-id: uint, proposal-id: uint, voter: principal }
+  bool
+)
+(define-map proposal-count-by-club uint uint)
+(define-read-only (get-proposal (club-id uint) (proposal-id uint))
+  (map-get? proposals { club-id: club-id, proposal-id: proposal-id })
+)
+(define-read-only (get-vote (club-id uint) (proposal-id uint) (voter principal))
+  (map-get? votes { club-id: club-id, proposal-id: proposal-id, voter: voter })
+)
+(define-read-only (get-proposal-count (club-id uint))
+  (default-to u0 (map-get? proposal-count-by-club club-id))
+)
+(define-private (validate-amount (amount uint))
+  (if (> amount u0)
+      (ok true)
+      (err ERR-INVALID-PROPOSAL-AMOUNT))
+)
+(define-private (validate-target (target principal))
+  (if (not (is-eq target tx-sender))
+      (ok true)
+      (err ERR-INVALID-PROPOSAL-TARGET))
+)
+(define-private (validate-duration (duration uint))
+  (if (> duration u0)
+      (ok true)
+      (err ERR-INVALID-PROPOSAL-DURATION))
+)
+(define-private (validate-description (desc (string-utf8 256)))
+  (if (and (> (len desc) u0) (<= (len desc) u256))
+      (ok true)
+      (err ERR-INVALID-PROPOSAL-DESCRIPTION))
+)
+(define-private (validate-risk-level (risk uint))
+  (if (<= risk u10)
+      (ok true)
+      (err ERR-INVALID-RISK-LEVEL))
+)
+(define-private (validate-expected-return (ret uint))
+  (if (> ret u0)
+      (ok true)
+      (err ERR-INVALID-EXPECTED-RETURN))
+)
+(define-private (validate-club-id (club-id uint))
+  (if (> club-id u0)
+      (ok true)
+      (err ERR-INVALID-CLUB-ID))
+)
+(define-private (validate-timestamp (ts uint))
+  (if (>= ts block-height)
+      (ok true)
+      (err ERR-INVALID-TIMESTAMP))
+)
+(define-private (is-member (club-id uint) (member principal))
+  (ok true)
+)
+(define-private (get-member-stake (club-id uint) (member principal))
+  (ok u100)
+)
+(define-private (get-voting-threshold (club-id uint))
+  (ok u50)
+)
+(define-private (get-funds (club-id uint))
+  (ok u1000)
+)
+(define-private (transfer-funds (club-id uint) (amount uint) (target principal))
+  (ok true)
+)
+(define-private (is-club-active (club-id uint))
+  (ok true)
+)
+(define-public (set-authority-contract (contract-principal principal))
+  (begin
+    (asserts! (is-none (var-get authority-contract)) (err ERR-NOT-AUTHORIZED))
+    (var-set authority-contract (some contract-principal))
+    (ok true)
+  )
+)
+(define-public (set-max-proposals-per-club (new-max uint))
+  (begin
+    (asserts! (is-some (var-get authority-contract)) (err ERR-NOT-AUTHORIZED))
+    (asserts! (> new-max u0) (err ERR-INVALID-UPDATE-PARAM))
+    (var-set max-proposals-per-club new-max)
+    (ok true)
+  )
+)
+(define-public (set-voting-period (new-period uint))
+  (begin
+    (asserts! (is-some (var-get authority-contract)) (err ERR-NOT-AUTHORIZED))
+    (asserts! (> new-period u0) (err ERR-INVALID-UPDATE-PARAM))
+    (var-set voting-period new-period)
+    (ok true)
+  )
+)
+(define-public (propose-investment
+  (club-id uint)
+  (amount uint)
+  (target principal)
+  (duration uint)
+  (description (string-utf8 256))
+  (risk-level uint)
+  (expected-return uint)
+)
+  (let (
+    (proposal-id (var-get next-proposal-id))
+    (current-count (get-proposal-count club-id))
+    (proposer tx-sender)
+  )
+    (try! (validate-club-id club-id))
+    (try! (is-club-active club-id))
+    (asserts! (< current-count (var-get max-proposals-per-club)) (err ERR-MAX-PROPOSALS-EXCEEDED))
+    (try! (validate-amount amount))
+    (try! (validate-target target))
+    (try! (validate-duration duration))
+    (try! (validate-description description))
+    (try! (validate-risk-level risk-level))
+    (try! (validate-expected-return expected-return))
+    (try! (is-member club-id proposer))
+    (asserts! (>= (unwrap-panic (get-funds club-id)) amount) (err ERR-INSUFFICIENT-STAKE))
+    (map-set proposals { club-id: club-id, proposal-id: proposal-id }
+      {
+        proposer: proposer,
+        amount: amount,
+        target: target,
+        duration: duration,
+        votes-for: u0,
+        votes-against: u0,
+        status: "open",
+        start-time: block-height,
+        description: description,
+        risk-level: risk-level,
+        expected-return: expected-return
+      }
+    )
+    (map-set proposal-count-by-club club-id (+ current-count u1))
+    (var-set next-proposal-id (+ proposal-id u1))
+    (print { event: "proposal-created", club-id: club-id, proposal-id: proposal-id })
+    (ok proposal-id)
+  )
+)
+(define-public (vote-on-proposal (club-id uint) (proposal-id uint) (vote bool))
+  (let (
+    (voter tx-sender)
+    (proposal (unwrap! (get-proposal club-id proposal-id) (err ERR-PROPOSAL-NOT-FOUND)))
+    (stake (unwrap! (get-member-stake club-id voter) (err ERR-INSUFFICIENT-STAKE)))
+  )
+    (try! (is-club-active club-id))
+    (try! (is-member club-id voter))
+    (asserts! (is-eq (get status proposal) "open") (err ERR-PROPOSAL-NOT-OPEN))
+    (asserts! (< (- block-height (get start-time proposal)) (var-get voting-period)) (err ERR-VOTING-CLOSED))
+    (asserts! (is-none (get-vote club-id proposal-id voter)) (err ERR-ALREADY-VOTED))
+    (map-set votes { club-id: club-id, proposal-id: proposal-id, voter: voter } vote)
+    (if vote
+        (map-set proposals { club-id: club-id, proposal-id: proposal-id }
+          (merge proposal { votes-for: (+ (get votes-for proposal) stake) }))
+        (map-set proposals { club-id: club-id, proposal-id: proposal-id }
+          (merge proposal { votes-against: (+ (get votes-against proposal) stake) })))
+    (print { event: "vote-cast", club-id: club-id, proposal-id: proposal-id, voter: voter, vote: vote })
+    (ok true)
+  )
+)
+(define-public (execute-proposal (club-id uint) (proposal-id uint))
+  (let (
+    (proposal (unwrap! (get-proposal club-id proposal-id) (err ERR-PROPOSAL-NOT-FOUND)))
+    (threshold (unwrap! (get-voting-threshold club-id) (err ERR-NOT-AUTHORIZED)))
+  )
+    (try! (is-club-active club-id))
+    (asserts! (is-eq (get status proposal) "open") (err ERR-PROPOSAL-NOT-OPEN))
+    (asserts! (>= (- block-height (get start-time proposal)) (var-get voting-period)) (err ERR-VOTING-CLOSED))
+    (asserts! (>= (get votes-for proposal) threshold) (err ERR-VOTING-THRESHOLD-NOT-MET))
+    (try! (transfer-funds club-id (get amount proposal) (get target proposal)))
+    (map-set proposals { club-id: club-id, proposal-id: proposal-id }
+      (merge proposal { status: "executed" }))
+    (print { event: "proposal-executed", club-id: club-id, proposal-id: proposal-id })
+    (ok true)
+  )
+)
+(define-public (close-proposal (club-id uint) (proposal-id uint))
+  (let (
+    (proposal (unwrap! (get-proposal club-id proposal-id) (err ERR-PROPOSAL-NOT-FOUND)))
+  )
+    (asserts! (is-eq (get proposer proposal) tx-sender) (err ERR-NOT-AUTHORIZED))
+    (asserts! (is-eq (get status proposal) "open") (err ERR-PROPOSAL-NOT-OPEN))
+    (map-set proposals { club-id: club-id, proposal-id: proposal-id }
+      (merge proposal { status: "closed" }))
+    (print { event: "proposal-closed", club-id: club-id, proposal-id: proposal-id })
+    (ok true)
+  )
+)
